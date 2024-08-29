@@ -499,3 +499,210 @@ class Bot(BaseBot):
         action_length: int | None = None,
     ) -> None:
         """Moderate a user in the 
+
+    async def userinfo(self, user: User, target_username: str) -> None:
+        user_info = await self.webapi.get_users(username=target_username, limit=1)
+
+        if not user_info.users:
+            await self.highrise.chat(" ")
+            return
+
+        user_id = user_info.users[0].user_id
+
+        user_info = await self.webapi.get_user(user_id)
+
+        number_of_followers = user_info.user.num_followers
+        number_of_friends = user_info.user.num_friends
+        country_code = user_info.user.country_code
+        outfit = user_info.user.outfit
+        bio = user_info.user.bio
+        active_room = user_info.user.active_room
+        crew = user_info.user.crew
+        number_of_following = user_info.user.num_following
+        joined_at = user_info.user.joined_at.strftime("%d/%m/%Y %H:%M:%S")
+
+        joined_date = user_info.user.joined_at.date()
+        today = datetime.now().date()
+        days_played = (today - joined_date).days
+
+        last_login = user_info.user.last_online_in.strftime("%d/%m/%Y %H:%M:%S") if user_info.user.last_online_in else "Son giriş bilgisi mevcut değil"
+
+        await self.highrise.chat(f"""Kullanıcı adı: {target_username}\nTakipçi: {number_of_followers}\nArkadaş: {number_of_friends}\nOyuna Başlama: {joined_at}\nOyanma Süresi: {days_played}""")
+
+    async def follow(self, user: User, message: str = ""):
+        self.following_user = user  
+        while self.following_user == user:
+            room_users = (await self.highrise.get_room_users()).content
+            for room_user, position in room_users:
+                if room_user.id == user.id:
+                    user_position = position
+                    break
+            if user_position is not None and isinstance(user_position, Position):
+                nearby_position = Position(user_position.x + 1.0, user_position.y, user_position.z)
+                await self.highrise.walk_to(nearby_position)
+            
+            await asyncio.sleep(0.5) 
+  
+    async def adjust_position(self, user: User, message: str, axis: str) -> None:
+        try:
+            adjustment = int(message[2:])
+            if message.startswith("-"):
+                adjustment *= -1
+
+            room_users = await self.highrise.get_room_users()
+            user_position = None
+
+            for user_obj, user_position in room_users.content:
+                if user_obj.id == user.id:
+                    break
+
+            if user_position:
+                new_position = None
+
+                if axis == 'x':
+                    new_position = Position(user_position.x + adjustment, user_position.y, user_position.z, user_position.facing)
+                elif axis == 'y':
+                    new_position = Position(user_position.x, user_position.y + adjustment, user_position.z, user_position.facing)
+                elif axis == 'z':
+                    new_position = Position(user_position.x, user_position.y, user_position.z + adjustment, user_position.facing)
+                else:
+                    print(f"Unsupported axis: {axis}")
+                    return
+
+                await self.teleport(user, new_position)
+
+        except ValueError:
+            print("Invalid adjustment value. Please use +x/-x, +y/-y, or +z/-z followed by an integer.")
+        except Exception as e:
+            print(f"An error occurred during position adjustment: {e}")
+  
+    async def switch_users(self, user: User, target_username: str) -> None:
+        try:
+            room_users = await self.highrise.get_room_users()
+
+            maker_position = None
+            for maker_user, maker_position in room_users.content:
+                if maker_user.id == user.id:
+                    break
+
+            target_position = None
+            for target_user, position in room_users.content:
+                if target_user.username.lower() == target_username.lower():
+                    target_position = position
+                    break
+
+            if maker_position and target_position:
+                await self.teleport(user, Position(target_position.x + 0.0001, target_position.y, target_position.z, target_position.facing))
+
+                await self.teleport(target_user, Position(maker_position.x + 0.0001, maker_position.y, maker_position.z, maker_position.facing))
+
+        except Exception as e:
+            print(f"An error occurred during user switch: {e}")
+
+    async def teleport(self, user: User, position: Position):
+        try:
+            await self.highrise.teleport(user.id, position)
+        except Exception as e:
+            print(f"Caught Teleport Error: {e}")
+
+    async def teleport_to_user(self, user: User, target_username: str) -> None:
+        try:
+            room_users = await self.highrise.get_room_users()
+            for target, position in room_users.content:
+                if target.username.lower() == target_username.lower():
+                    z = position.z
+                    new_z = z - 1
+                    await self.teleport(user, Position(position.x, position.y, new_z, position.facing))
+                    break
+        except Exception as e:
+            print(f"An error occurred while teleporting to {target_username}: {e}")
+
+    async def teleport_user_next_to(self, target_username: str, requester_user: User) -> None:
+        try:
+
+            room_users = await self.highrise.get_room_users()
+            requester_position = None
+            for user, position in room_users.content:
+                if user.id == requester_user.id:
+                    requester_position = position
+                    break
+
+
+          
+            for user, position in room_users.content:
+                if user.username.lower() == target_username.lower():
+                    z = requester_position.z
+                    new_z = z + 1  
+                    await self.teleport(user, Position(requester_position.x, requester_position.y, new_z, requester_position.facing))
+                    break
+        except Exception as e:
+            print(f"An error occurred while teleporting {target_username} next to {requester_user.username}: {e}")
+
+    async def on_tip(self, sender: User, receiver: User, tip: CurrencyItem | Item) -> None:
+        message = f"{sender.username} tarafından {receiver.username} kişine {tip.amount} altın bağış yapıldı."
+        await self.highrise.chat(message)
+  
+    async def reset_target_position(self, target_user_obj: User, initial_position: Position) -> None:
+        try:
+            while True:
+                room_users = await self.highrise.get_room_users()
+                current_position = next((position for user, position in room_users.content if user.id == target_user_obj.id), None)
+
+                if current_position and current_position != initial_position:
+                    await self.teleport(target_user_obj, initial_position)
+
+                await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"An error occurred during position monitoring: {e}")  
+  
+  
+    async def run(self, room_id, token) -> None:
+        await __main__.main(self, room_id, token)
+class WebServer():
+
+  def __init__(self):
+    self.app = Flask(__name__)
+
+    @self.app.route('/')
+    def index() -> str:
+      return "Alive"
+
+  def run(self) -> None:
+    self.app.run(host='0.0.0.0', port=8080)
+
+  def keep_alive(self):
+    t = Thread(target=self.run)
+    t.start()
+    
+class RunBot():
+  room_id = "66cc50ab3cbb8456fb1345dd"
+  bot_token = "66b1cd58574aabe73b9ef2109648a2b0b615d895a515cd4735a0c81fd345d736"
+  bot_file = "main"
+  bot_class = "Bot"
+
+  def __init__(self) -> None:
+    self.definitions = [
+        BotDefinition(
+            getattr(import_module(self.bot_file), self.bot_class)(),
+            self.room_id, self.bot_token)
+    ] 
+
+  def run_loop(self) -> None:
+    while True:
+      try:
+        arun(main(self.definitions)) 
+      except Exception as e:
+        import traceback
+        print("Caught an exception:")
+        traceback.print_exc()
+        time.sleep(1)
+        continue
+
+
+if __name__ == "__main__":
+  WebServer().keep_alive()
+
+  RunBot().run_loop()
